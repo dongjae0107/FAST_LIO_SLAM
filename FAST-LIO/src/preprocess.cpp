@@ -48,6 +48,8 @@ void Preprocess::process(const livox_ros_driver::CustomMsg::ConstPtr &msg, Point
 
 void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out)
 {
+  // printf("LiDAR Type: %d\n", lidar_type);
+
   switch (lidar_type)
   {
   case OUST64:
@@ -450,7 +452,7 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
     // pub_func(pl_surf, pub_corn, msg->header.stamp);
 }
 
-void Preprocess:hesai_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
+void Preprocess::hesai_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
   pl_surf.clear();
   pl_corn.clear();

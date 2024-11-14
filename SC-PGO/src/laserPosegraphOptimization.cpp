@@ -130,9 +130,27 @@ ros::Publisher pubLoopScanLocal, pubLoopSubmapLocal;
 ros::Publisher pubOdomRepubVerifier;
 
 std::string save_directory;
-std::string pgKITTIformat, pgScansDirectory;
+std::string pgKITTIformat, pgScansDirectory, pgSCDDirectory;
 std::string odomKITTIformat;
+std::fstream pgSaveStream;
 std::fstream pgTimeSaveStream;
+std::vector<std::string> edges_str;
+std::vector<std::string> vertices_str;
+
+void saveSCD(std::string fileName, Eigen::MatrixXd matrix, std::string delimiter = " ")
+{
+    // delimiter: ", " or " " etc.
+
+    int precision = 3; // or Eigen::FullPrecision, but SCD does not require such accruate precisions so 3 is enough.
+    const static Eigen::IOFormat the_format(precision, Eigen::DontAlignCols, delimiter, "\n");
+ 
+    std::ofstream file(fileName);
+    if (file.is_open())
+    {
+        file << matrix.format(the_format);
+        file.close();
+    }
+}
 
 std::string padZeros(int val, int num_digits = 6) {
   std::ostringstream out;
@@ -186,6 +204,38 @@ void saveOptimizedVerticesKITTIformat(gtsam::Values _estimates, std::string _fil
                << col1.y() << " " << col2.y() << " " << col3.y() << " " << t.y() << " "
                << col1.z() << " " << col2.z() << " " << col3.z() << " " << t.z() << std::endl;
     }
+}
+
+void writeVertex(const int _node_idx, const gtsam::Pose3& _initPose)
+{
+    gtsam::Point3 t = _initPose.translation();
+    gtsam::Rot3 R = _initPose.rotation();
+
+    std::string curVertexInfo {
+        "VERTEX_SE3:QUAT " + std::to_string(_node_idx) + " "
+        + std::to_string(t.x()) + " " + std::to_string(t.y()) + " " + std::to_string(t.z())  + " " 
+        + std::to_string(R.toQuaternion().x()) + " " + std::to_string(R.toQuaternion().y()) + " " 
+        + std::to_string(R.toQuaternion().z()) + " " + std::to_string(R.toQuaternion().w()) };
+
+    // pgVertexSaveStream << curVertexInfo << std::endl;
+    vertices_str.emplace_back(curVertexInfo);
+    // printf("num of vertices: %d\n", int(vertices_str.size()));
+}
+
+void writeEdge(const std::pair<int, int> _node_idx_pair, const gtsam::Pose3& _relPose)
+{
+    gtsam::Point3 t = _relPose.translation();
+    gtsam::Rot3 R = _relPose.rotation();
+
+    std::string curEdgeInfo {
+        "EDGE_SE3:QUAT " + std::to_string(_node_idx_pair.first) + " " + std::to_string(_node_idx_pair.second) + " "
+        + std::to_string(t.x()) + " " + std::to_string(t.y()) + " " + std::to_string(t.z())  + " " 
+        + std::to_string(R.toQuaternion().x()) + " " + std::to_string(R.toQuaternion().y()) + " " 
+        + std::to_string(R.toQuaternion().z()) + " " + std::to_string(R.toQuaternion().w()) };
+
+    // pgEdgeSaveStream << curEdgeInfo << std::endl;
+    edges_str.emplace_back(curEdgeInfo);
+    // printf("num of edges: %d\n", int(edges_str.size()));
 }
 
 void laserOdometryHandler(const nav_msgs::Odometry::ConstPtr &_laserOdometry)
@@ -587,6 +637,8 @@ void process_pg()
                 }   
                 mtxPosegraph.unlock();
 
+                writeVertex(init_node_idx, poseOrigin);
+
                 gtSAMgraphMade = true; 
 
                 cout << "posegraph prior node " << init_node_idx << " added" << endl;
@@ -608,17 +660,27 @@ void process_pg()
                         gtSAMgraph.add(gtsam::GPSFactor(curr_node_idx, gpsConstraint, robustGPSNoise));
                         cout << "GPS factor added at node " << curr_node_idx << endl;
                     }
-                    initialEstimate.insert(curr_node_idx, poseTo);                
+
+                    initialEstimate.insert(curr_node_idx, poseTo);
                     // runISAM2opt();
                 }
                 mtxPosegraph.unlock();
+
+                writeVertex(curr_node_idx, poseTo);
+                writeEdge(std::pair<int, int>(prev_node_idx, curr_node_idx), poseFrom.between(poseTo));
 
                 if(curr_node_idx % 100 == 0)
                     cout << "posegraph odom node " << curr_node_idx << " added." << endl;
             }
             // if want to print the current graph, use gtSAMgraph.print("\nFactor Graph:\n");
 
-            // save utility 
+            // save sc data
+            const auto& curr_scd = scManager.getConstRefRecentSCD();
+            std::string curr_scd_node_idx = padZeros(scManager.polarcontexts_.size()-1);
+
+            saveSCD(pgSCDDirectory + curr_scd_node_idx + ".scd", curr_scd);
+
+            // save utility
             std::string curr_node_idx_str = padZeros(curr_node_idx);
             pcl::io::savePCDFileBinary(pgScansDirectory + curr_node_idx_str + ".pcd", *thisKeyFrame); // scan 
             pgTimeSaveStream << timeLaser << std::endl; // path 
@@ -689,7 +751,9 @@ void process_icp(void)
                 gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Pose3>(prev_node_idx, curr_node_idx, relative_pose, robustLoopNoise));
                 // runISAM2opt();
                 mtxPosegraph.unlock();
-            } 
+
+                writeEdge(loop_idx_pair, relative_pose_optional.value());
+            }
         }
 
         // wait (must required for running the while loop)
@@ -726,6 +790,18 @@ void process_isam(void)
             saveOdometryVerticesKITTIformat(odomKITTIformat); // pose
         }
     }
+
+    std::cout << "Saving the posegraph ... " << std::endl;
+    printf("Saving the posegraph ... \n");
+
+    for (auto& _line : vertices_str) {
+        pgSaveStream << _line << std::endl;
+    }
+    for (auto& _line : edges_str) {
+        pgSaveStream << _line << std::endl;
+    }
+
+    pgSaveStream.close();
 }
 
 void pubMap(void)
@@ -764,6 +840,7 @@ void process_viz_map(void)
             pubMap();
         }
     }
+
 } // pointcloud_viz
 
 
@@ -773,13 +850,22 @@ int main(int argc, char **argv)
 	ros::NodeHandle nh;
 
 	nh.param<std::string>("save_directory", save_directory, "/"); // pose assignment every k m move 
+    
     pgKITTIformat = save_directory + "optimized_poses.txt";
     odomKITTIformat = save_directory + "odom_poses.txt";
+
+    pgSaveStream = std::fstream(save_directory + "singlesession_posegraph.g2o", std::fstream::out);
+
     pgTimeSaveStream = std::fstream(save_directory + "times.txt", std::fstream::out); 
     pgTimeSaveStream.precision(std::numeric_limits<double>::max_digits10);
+    
     pgScansDirectory = save_directory + "Scans/";
     auto unused = system((std::string("exec rm -r ") + pgScansDirectory).c_str());
     unused = system((std::string("mkdir -p ") + pgScansDirectory).c_str());
+
+    pgSCDDirectory = save_directory + "SCDs/";
+    unused = system((std::string("exec rm -r ") + pgSCDDirectory).c_str());
+    unused = system((std::string("mkdir -p ") + pgSCDDirectory).c_str());
 
 	nh.param<double>("keyframe_meter_gap", keyframeMeterGap, 2.0); // pose assignment every k m move 
 	nh.param<double>("keyframe_deg_gap", keyframeDegGap, 10.0); // pose assignment every k deg rot 
