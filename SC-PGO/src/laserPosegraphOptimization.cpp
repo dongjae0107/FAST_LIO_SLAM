@@ -792,7 +792,6 @@ void process_isam(void)
     }
 
     std::cout << "Saving the posegraph ... " << std::endl;
-    printf("Saving the posegraph ... \n");
 
     for (auto& _line : vertices_str) {
         pgSaveStream << _line << std::endl;
@@ -840,7 +839,6 @@ void process_viz_map(void)
             pubMap();
         }
     }
-
 } // pointcloud_viz
 
 
@@ -912,6 +910,13 @@ int main(int argc, char **argv)
 	std::thread viz_path {process_viz_path}; // visualization - path (high frequency)
 
  	ros::spin();
+
+    posegraph_slam.join();
+    lc_detection.join();
+    icp_calculation.join();
+    isam_update.join();
+    viz_map.join();
+    viz_path.join();
 
 	return 0;
 }
